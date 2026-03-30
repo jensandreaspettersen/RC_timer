@@ -1,0 +1,3 @@
+opencv-python>=4.8
+pyaudio>=0.2.14
+numpy>=1.24
