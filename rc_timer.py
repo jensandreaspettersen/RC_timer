@@ -43,18 +43,15 @@ IS_MAC = sys.platform == 'darwin'
 
 
 def _open_camera(index: int):
-    """Open a camera, preferring AVFoundation on macOS for correct permissions."""
-    if IS_MAC:
-        cap = cv2.VideoCapture(index, cv2.CAP_AVFOUNDATION)
-    else:
-        cap = cv2.VideoCapture(index)
+    """Open a camera using the default backend (OpenCV picks AVFoundation on macOS)."""
+    cap = cv2.VideoCapture(index)
     if cap.isOpened():
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
     return cap
 
 
-def _list_cameras(max_test: int = 5) -> list[int]:
+def _list_cameras(max_test: int = 2) -> list[int]:
     """Return indices of available cameras."""
     available = []
     for i in range(max_test):
@@ -333,8 +330,7 @@ class RCTimerApp:
         self.lap_trigger_mode = mode
         if mode == 'motion':
             self._sound_frame.pack_forget()
-            self._motion_frame.pack(fill=tk.X, padx=10, pady=(0, 2),
-                                    before=self._sound_frame)
+            self._motion_frame.pack(fill=tk.X, padx=10, pady=(0, 2))
         else:
             self._motion_frame.pack_forget()
             self._sound_frame.pack(fill=tk.X, padx=10, pady=(0, 2))
