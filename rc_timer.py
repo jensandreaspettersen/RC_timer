@@ -24,6 +24,16 @@ FG_WHITE  = '#ffffff'
 FG_GREY   = '#888888'
 
 
+def _get_input_devices() -> list[tuple[int, str]]:
+    """Return list of (device_index, display_name) for all input devices."""
+    devices = []
+    for i, dev in enumerate(sd.query_devices()):
+        if dev['max_input_channels'] > 0:
+            name = dev['name']
+            devices.append((i, name))
+    return devices
+
+
 class RCTimerApp:
     def __init__(self, root: tk.Tk):
         self.root = root
@@ -45,6 +55,12 @@ class RCTimerApp:
         self.last_lap_time      = 0.0
         self.last_clap_time     = 0.0
 
+        # Device selection — None means system default
+        self._input_devices  = _get_input_devices()
+        self._active_device  = None   # sounddevice index
+        self._audio_stop     = threading.Event()
+        self._audio_thread   = None
+
         self._build_ui()
         self._start_audio()
         self._tick()
@@ -57,7 +73,30 @@ class RCTimerApp:
         # Title
         tk.Label(self.root, text="RC CAR TRACK TIMER",
                  font=('Helvetica', 26, 'bold'),
-                 bg=BG_DARK, fg=FG_GOLD).pack(pady=(18, 10))
+                 bg=BG_DARK, fg=FG_GOLD).pack(pady=(18, 6))
+
+        # ── Microphone source selector ──
+        dev_row = tk.Frame(self.root, bg=BG_DARK)
+        dev_row.pack(pady=(0, 8))
+
+        tk.Label(dev_row, text="Microphone:",
+                 font=('Helvetica', 11), bg=BG_DARK, fg=FG_GREY
+                 ).pack(side=tk.LEFT, padx=(0, 8))
+
+        default_label = "System default"
+        dev_names = [default_label] + [name for _, name in self._input_devices]
+        self._dev_var = tk.StringVar(value=default_label)
+        dev_menu = tk.OptionMenu(dev_row, self._dev_var, *dev_names,
+                                 command=self._on_device_change)
+        dev_menu.config(bg=BG_ACCENT, fg=FG_WHITE, font=('Helvetica', 11),
+                        highlightthickness=0, relief=tk.FLAT,
+                        activebackground='#1a3a5e', activeforeground=FG_WHITE,
+                        cursor='hand2', width=38)
+        dev_menu['menu'].config(bg=BG_ACCENT, fg=FG_WHITE,
+                                font=('Helvetica', 11),
+                                activebackground=FG_TEAL,
+                                activeforeground='black')
+        dev_menu.pack(side=tk.LEFT)
 
         # ── Top row: current time + best time ──
         top = tk.Frame(self.root, bg=BG_DARK)
@@ -180,10 +219,28 @@ class RCTimerApp:
     # Audio
     # ------------------------------------------------------------------
 
+    def _on_device_change(self, choice: str):
+        """Called when the user picks a different microphone."""
+        if choice == "System default":
+            self._active_device = None
+        else:
+            for idx, name in self._input_devices:
+                if name == choice:
+                    self._active_device = idx
+                    break
+        # Restart the audio stream on the new device
+        self._audio_stop.set()
+        if self._audio_thread:
+            self._audio_thread.join(timeout=2)
+        self._audio_stop.clear()
+        self._start_audio()
+
     def _start_audio(self):
-        threading.Thread(target=self._audio_loop, daemon=True).start()
+        self._audio_thread = threading.Thread(target=self._audio_loop, daemon=True)
+        self._audio_thread.start()
 
     def _audio_loop(self):
+        device = self._active_device
         try:
             def callback(indata, _frames, _time, _status):
                 level = float(np.max(np.abs(indata)))
@@ -205,11 +262,12 @@ class RCTimerApp:
                     self.root.after(0, self._record_lap)
 
             with sd.InputStream(callback=callback, channels=1,
-                                samplerate=44100, blocksize=512):
-                while True:
+                                samplerate=44100, blocksize=512,
+                                device=device):
+                while not self._audio_stop.is_set():
                     time.sleep(0.05)
         except Exception as exc:
-            print(f"Audio error: {exc}")
+            print(f"Audio error (device={device}): {exc}")
 
     # ------------------------------------------------------------------
     # Timer
