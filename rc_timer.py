@@ -98,6 +98,11 @@ class RCTimerApp:
                                 activeforeground='black')
         dev_menu.pack(side=tk.LEFT)
 
+        self._dev_status = tk.Label(self.root, text="",
+                                    font=('Helvetica', 10, 'italic'),
+                                    bg=BG_DARK, fg=FG_TEAL)
+        self._dev_status.pack(pady=(0, 4))
+
         # ── Top row: current time + best time ──
         top = tk.Frame(self.root, bg=BG_DARK)
         top.pack(padx=20, pady=(0, 10), fill=tk.X)
@@ -228,10 +233,15 @@ class RCTimerApp:
                 if name == choice:
                     self._active_device = idx
                     break
-        # Restart the audio stream on the new device
+
+        self._dev_status.config(text="Switching…", fg=FG_GREY)
+        # Restart off the main thread so the UI doesn't freeze
+        threading.Thread(target=self._restart_audio, daemon=True).start()
+
+    def _restart_audio(self):
         self._audio_stop.set()
         if self._audio_thread:
-            self._audio_thread.join(timeout=2)
+            self._audio_thread.join(timeout=3)
         self._audio_stop.clear()
         self._start_audio()
 
@@ -242,19 +252,29 @@ class RCTimerApp:
     def _audio_loop(self):
         device = self._active_device
         try:
+            # Query the device's native sample rate so Bluetooth HFP
+            # (8 kHz / 16 kHz) works just as well as a wired mic (44.1 kHz).
+            if device is not None:
+                info       = sd.query_devices(device, 'input')
+                samplerate = int(info['default_samplerate'])
+            else:
+                samplerate = int(sd.query_devices(kind='input')['default_samplerate'])
+
+            name = (sd.query_devices(device)['name']
+                    if device is not None else "System default")
+            self.root.after(0, lambda: self._dev_status.config(
+                text=f"● {name}  ({samplerate} Hz)", fg=FG_TEAL))
+
             def callback(indata, _frames, _time, _status):
                 level = float(np.max(np.abs(indata)))
                 self.audio_level = level
                 now = time.time()
 
-                # Clap → start (only when stopped)
                 if (not self.running
                         and level > self.clap_threshold
                         and now - self.last_clap_time > 1.5):
                     self.last_clap_time = now
                     self.root.after(0, self.manual_start)
-
-                # Car sound → lap (only when running)
                 elif (self.running
                         and level > self.car_threshold
                         and now - self.last_lap_time > self.cooldown):
@@ -262,11 +282,15 @@ class RCTimerApp:
                     self.root.after(0, self._record_lap)
 
             with sd.InputStream(callback=callback, channels=1,
-                                samplerate=44100, blocksize=512,
+                                samplerate=samplerate, blocksize=512,
                                 device=device):
                 while not self._audio_stop.is_set():
                     time.sleep(0.05)
+
         except Exception as exc:
+            msg = str(exc)
+            self.root.after(0, lambda: self._dev_status.config(
+                text=f"Error: {msg}", fg=FG_PINK))
             print(f"Audio error (device={device}): {exc}")
 
     # ------------------------------------------------------------------
